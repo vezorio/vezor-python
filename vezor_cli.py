@@ -12,14 +12,48 @@ from rich.prompt import Prompt
 from rich import print as rprint
 from vezor import VezorClient as VezorAPIClient
 from config import CLIConfig
-from supabase_client import SupabaseAuthClient
+from clerk_client import ClerkAuthClient, ClerkAuthError, ClerkSessionExpiredError
 
 console = Console()
 
 
+def get_fresh_token() -> str:
+    """Mint a fresh short-lived Clerk session JWT for backend requests.
+
+    Clerk session JWTs expire after 60 seconds, so the keychain stores the
+    long-lived client token and a fresh JWT is minted for every command.
+    Returns None when not logged in; aborts when the session was revoked.
+    """
+    client_token = CLIConfig.get_client_token()
+    session_id = CLIConfig.get_session_id()
+
+    if not client_token or not session_id:
+        return None
+
+    auth = ClerkAuthClient(
+        frontend_api=CLIConfig.get_clerk_frontend_api(),
+        client_token=client_token,
+        session_id=session_id,
+    )
+    try:
+        token = auth.get_token()
+    except ClerkSessionExpiredError:
+        console.print("[red]Error: Session expired. Run 'vezor login' again.[/red]")
+        raise click.Abort()
+    except Exception as e:
+        console.print(f"[red]Error: Failed to refresh auth token: {str(e)}[/red]")
+        raise click.Abort()
+
+    # Clerk rotates the client token; persist the latest one.
+    if auth.client_token and auth.client_token != client_token:
+        CLIConfig.set_client_token(auth.client_token)
+
+    return token
+
+
 def get_client() -> VezorAPIClient:
     """Get authenticated API client with organization context"""
-    token = CLIConfig.get_token()
+    token = get_fresh_token()
     api_url = CLIConfig.get_api_url()
     org_id = CLIConfig.get_organization_id()
 
@@ -36,7 +70,7 @@ def get_client() -> VezorAPIClient:
 
 def get_client_no_org() -> VezorAPIClient:
     """Get authenticated API client without requiring organization"""
-    token = CLIConfig.get_token()
+    token = get_fresh_token()
     api_url = CLIConfig.get_api_url()
 
     if not token:
@@ -68,8 +102,7 @@ def cli():
 @cli.command()
 def login():
     """Authenticate with Vezor"""
-    supabase_url = CLIConfig.get_supabase_url()
-    supabase_key = CLIConfig.get_supabase_anon_key()
+    frontend_api = CLIConfig.get_clerk_frontend_api()
 
     console.print(f"[cyan]Signing in to Vezor...[/cyan]")
 
@@ -77,11 +110,25 @@ def login():
     password = Prompt.ask("Password", password=True)
 
     try:
-        supabase_client = SupabaseAuthClient(supabase_url, supabase_key)
-        result = supabase_client.sign_in(email, password)
+        # Reuse any stored client token so Clerk recognizes this device and
+        # can skip the second-factor email code.
+        auth = ClerkAuthClient(
+            frontend_api=frontend_api,
+            client_token=CLIConfig.get_client_token(),
+        )
+        result = auth.sign_in(email, password)
 
-        access_token = result['session']['access_token']
-        CLIConfig.set_token(access_token)
+        if result['status'] == 'needs_second_factor':
+            console.print(f"[yellow]A verification code was sent to {email}.[/yellow]")
+            code = Prompt.ask("Verification code")
+            result = auth.verify_email_code(code)
+
+        # Persist the long-lived client token (keychain) and session id.
+        # Session JWTs expire in 60s, so they are minted per request instead.
+        CLIConfig.set_client_token(auth.client_token)
+        CLIConfig.set_session_id(auth.session_id)
+
+        access_token = result['session'].get('access_token') or auth.get_token()
 
         console.print(f"[green]Signed in successfully as {email}[/green]")
 
@@ -111,7 +158,23 @@ def login():
 @cli.command()
 def logout():
     """Remove stored credentials"""
-    CLIConfig.delete_token()
+    client_token = CLIConfig.get_client_token()
+    session_id = CLIConfig.get_session_id()
+
+    # Best-effort remote revoke of the Clerk session
+    if client_token and session_id:
+        try:
+            auth = ClerkAuthClient(
+                frontend_api=CLIConfig.get_clerk_frontend_api(),
+                client_token=client_token,
+                session_id=session_id,
+            )
+            auth.sign_out()
+        except Exception:
+            pass
+
+    CLIConfig.delete_client_token()
+    CLIConfig.clear_session_id()
     CLIConfig.clear_organization()
     console.print("[green]Logged out successfully[/green]")
 
@@ -119,8 +182,7 @@ def logout():
 @cli.command()
 def whoami():
     """Show current user and organization"""
-    token = CLIConfig.get_token()
-    if not token:
+    if not CLIConfig.is_authenticated():
         console.print("[yellow]Not logged in[/yellow]")
         return
 

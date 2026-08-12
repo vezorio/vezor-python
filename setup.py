@@ -10,14 +10,13 @@ setup(
     author_email='team@vezor.io',
     url='https://github.com/vezor/vezor-python',
     packages=find_packages(),
-    py_modules=['vezor_cli', 'config', 'supabase_client'],
+    py_modules=['vezor_cli', 'config', 'clerk_client'],
     install_requires=[
         'requests>=2.31.0',
         'click>=8.1.7',
         'PyYAML>=6.0.1',
         'rich>=13.7.0',
         'keyring>=24.3.0',
-        'supabase>=2.0.0',
     ],
     entry_points={
         'console_scripts': [
