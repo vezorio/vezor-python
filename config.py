@@ -20,8 +20,8 @@ class CLIConfig:
     # PLACEHOLDERS: replace once the Clerk vezor application exists. The
     # frontend API domain can be derived from the publishable key
     # (pk_live_<base64-of-domain>) -- see clerk_client.derive_frontend_api.
-    DEFAULT_CLERK_PUBLISHABLE_KEY = 'CLERK_VEZOR_PUBLISHABLE_KEY'
-    DEFAULT_CLERK_FRONTEND_API = 'CLERK_VEZOR_FRONTEND_API'
+    DEFAULT_CLERK_PUBLISHABLE_KEY = 'pk_live_Y2xlcmsudmV6b3IuaW8k'
+    DEFAULT_CLERK_FRONTEND_API = 'clerk.vezor.io'
     DEFAULT_API_URL = 'https://api.vezor.io'
     CONFIG_FILE = Path.home() / '.vezor' / 'config'
 
